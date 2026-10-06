@@ -2,7 +2,7 @@
 
 Trace any part of an image and turn it into a transparent sticker you can copy or download. Wrapped in a silver-and-white 8-bit UI with a pixel panda that sleeps, sits, munches bamboo, and cheers when you save a sticker.
 
-**Live:** _add your Vercel link here_
+**Live:** [snipsnipping.vercel.app](https://snipsnipping.vercel.app)
 
 ## Features
 
