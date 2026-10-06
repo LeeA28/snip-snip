@@ -78,3 +78,33 @@ export function bounds(points) {
 export function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
+
+/**
+ * Zoom a view by `factor`, keeping the screen point `anchor` over the same image pixel.
+ * view = { scale, ox, oy }: screen = offset + image × scale.
+ * The new scale is clamped to [minScale, maxScale].
+ */
+export function zoomAt(view, factor, anchor, minScale, maxScale) {
+  const scale = clamp(view.scale * factor, minScale, maxScale);
+  const k = scale / view.scale; // how much the zoom actually changed after clamping
+  // The anchor's distance from the image's corner grows by k, so move the corner to compensate.
+  return {
+    scale,
+    ox: anchor.x - (anchor.x - view.ox) * k,
+    oy: anchor.y - (anchor.y - view.oy) * k,
+  };
+}
+
+/**
+ * Keep at least `margin` screen px of the image inside the viewport,
+ * so it can't be dragged completely out of sight.
+ */
+export function clampPan(view, imgW, imgH, viewW, viewH, margin) {
+  const w = imgW * view.scale;
+  const h = imgH * view.scale;
+  return {
+    scale: view.scale,
+    ox: clamp(view.ox, margin - w, viewW - margin),
+    oy: clamp(view.oy, margin - h, viewH - margin),
+  };
+}

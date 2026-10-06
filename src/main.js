@@ -17,6 +17,10 @@ const els = {
   newBtn: $('newBtn'),
   undoBtn: $('undoBtn'),
   retraceBtn: $('retraceBtn'),
+  zoomInBtn: $('zoomInBtn'),
+  zoomOutBtn: $('zoomOutBtn'),
+  fitBtn: $('fitBtn'),
+  zoomLabel: $('zoomLabel'),
   status: $('status'),
   previewImg: $('previewImg'),
   previewEmpty: $('previewEmpty'),
@@ -70,6 +74,12 @@ const editor = createEditor(els.canvas, {
   },
   onNotice(text) {
     notice(text);
+  },
+  onZoom(percent) {
+    els.zoomLabel.textContent = `${percent}%`;
+    els.zoomInBtn.disabled = false;
+    els.zoomOutBtn.disabled = false;
+    els.fitBtn.disabled = false;
   },
 });
 
@@ -143,6 +153,9 @@ window.addEventListener('paste', (e) => {
 
 els.undoBtn.addEventListener('click', () => editor.undo());
 els.retraceBtn.addEventListener('click', () => editor.retrace());
+els.zoomInBtn.addEventListener('click', () => editor.zoomIn());
+els.zoomOutBtn.addEventListener('click', () => editor.zoomOut());
+els.fitBtn.addEventListener('click', () => editor.fit());
 
 window.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;
@@ -176,6 +189,41 @@ document.querySelectorAll('input[name="outlineColor"]').forEach((radio) => {
   });
 });
 setOutlineUI();
+
+// ---------- trace line colour (remembered between visits) ----------
+
+const TRACE_KEY = 'snip-snip:traceColor';
+const traceRadios = [...document.querySelectorAll('input[name="traceColor"]')];
+const traceColors = traceRadios.map((r) => r.value);
+
+// localStorage can throw (e.g. storage blocked in some private windows), so never let it break the page.
+function loadTraceColor() {
+  try {
+    const saved = localStorage.getItem(TRACE_KEY);
+    if (traceColors.includes(saved)) return saved; // ignore anything that isn't one of our colours
+  } catch {
+    // fall through to the default
+  }
+  return traceColors[0];
+}
+
+function saveTraceColor(color) {
+  try {
+    localStorage.setItem(TRACE_KEY, color);
+  } catch {
+    // not saved this time; the colour still works for this visit
+  }
+}
+
+const startColor = loadTraceColor();
+traceRadios.forEach((radio) => {
+  radio.checked = radio.value === startColor;
+  radio.addEventListener('change', () => {
+    editor.setTraceColor(radio.value);
+    saveTraceColor(radio.value);
+  });
+});
+editor.setTraceColor(startColor);
 
 // ---------- sticker preview ----------
 

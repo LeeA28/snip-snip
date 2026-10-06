@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { distToSegment, simplify, polygonArea, bounds, clamp } from './geometry.js';
+import { distToSegment, simplify, polygonArea, bounds, clamp, zoomAt, clampPan } from './geometry.js';
 
 describe('distToSegment', () => {
   it('measures straight down to the middle of a segment', () => {
@@ -104,5 +104,39 @@ describe('bounds and clamp', () => {
     expect(clamp(-5, 0, 10)).toBe(0);
     expect(clamp(5, 0, 10)).toBe(5);
     expect(clamp(15, 0, 10)).toBe(10);
+  });
+});
+
+describe('zoomAt', () => {
+  const imageXUnder = (view, sx) => (sx - view.ox) / view.scale;
+
+  it('keeps the pixel under the mouse in place', () => {
+    const view = { scale: 0.5, ox: 100, oy: 40 };
+    const anchor = { x: 300, y: 200 };
+    const next = zoomAt(view, 2, anchor, 0.1, 8);
+    expect(next.scale).toBe(1);
+    expect(next.ox).toBe(-100); // 300 − (300 − 100) × 2
+    expect(imageXUnder(next, 300)).toBe(imageXUnder(view, 300)); // both 400
+  });
+
+  it('clamps the scale and only moves by the zoom that actually happened', () => {
+    const view = { scale: 6, ox: 0, oy: 0 };
+    const next = zoomAt(view, 4, { x: 60, y: 60 }, 0.5, 8);
+    expect(next.scale).toBe(8);
+    expect(next.ox).toBeCloseTo(60 - 60 * (8 / 6));
+  });
+});
+
+describe('clampPan', () => {
+  it('stops the image leaving the view', () => {
+    const view = { scale: 1, ox: 5000, oy: -5000 };
+    const next = clampPan(view, 1000, 500, 800, 600, 40);
+    expect(next.ox).toBe(760); // 800 − 40: the left edge can't go past the right side
+    expect(next.oy).toBe(-460); // 40 − 500: the bottom edge can't go above the top
+  });
+
+  it('leaves a view that is already fine alone', () => {
+    const view = { scale: 2, ox: -100, oy: 20 };
+    expect(clampPan(view, 1000, 500, 800, 600, 40)).toEqual(view);
   });
 });

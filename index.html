@@ -44,6 +44,12 @@
           <button class="px-btn" id="newBtn" type="button">new image</button>
           <button class="px-btn" id="undoBtn" type="button" disabled>undo</button>
           <button class="px-btn" id="retraceBtn" type="button" disabled>retrace</button>
+          <div class="zoom-group" role="group" aria-label="Zoom">
+            <button class="px-btn square" id="zoomOutBtn" type="button" aria-label="Zoom out" disabled>&minus;</button>
+            <span class="zoom-label" id="zoomLabel" aria-live="polite">&ndash;</span>
+            <button class="px-btn square" id="zoomInBtn" type="button" aria-label="Zoom in" disabled>+</button>
+            <button class="px-btn" id="fitBtn" type="button" disabled>fit</button>
+          </div>
         </div>
       </section>
 
@@ -81,6 +87,17 @@
           </div>
         </section>
 
+        <section class="panel">
+          <div class="panel-title"><span>TRACE LINE</span></div>
+          <div class="swatches flush" role="radiogroup" aria-label="Trace line colour">
+            <label class="swatch"><input type="radio" name="traceColor" value="#ff0000" checked /><span style="--c: #ff0000"></span>red</label>
+            <label class="swatch"><input type="radio" name="traceColor" value="#00ff00" /><span style="--c: #00ff00"></span>lime</label>
+            <label class="swatch"><input type="radio" name="traceColor" value="#00ffff" /><span style="--c: #00ffff"></span>cyan</label>
+            <label class="swatch"><input type="radio" name="traceColor" value="#ff00ff" /><span style="--c: #ff00ff"></span>magenta</label>
+            <label class="swatch"><input type="radio" name="traceColor" value="#ffff00" /><span style="--c: #ffff00"></span>yellow</label>
+          </div>
+        </section>
+
         <section class="panel help">
           <div class="panel-title"><span>HOW TO</span></div>
           <ul>
@@ -89,6 +106,9 @@
             <li><b>double-click a line</b> to add a dot</li>
             <li><b>double-click a dot</b> to remove it</li>
             <li><b>ctrl + z</b> to undo</li>
+            <li><b>scroll</b> to zoom in and out</li>
+            <li><b>hold space + drag</b> to move around</li>
+            <li><b>fit</b> shows the whole image again</li>
           </ul>
         </section>
       </aside>

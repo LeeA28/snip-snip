@@ -1,21 +1,25 @@
-// The big canvas: shows the image, records the lasso, and lets you edit the dots.
+// The big canvas: shows the image, records the lasso, lets you edit the dots, and zoom/pan.
 //
 // Two coordinate systems are used:
 //  - "image" coords: pixels of the original image. Points are STORED in these,
-//    so the cutout is full resolution no matter how small the image looks on screen.
+//    so the cutout is full resolution no matter how the image is zoomed on screen.
 //  - "screen" coords: CSS pixels on the canvas. Used for drawing and mouse hit-tests.
-// view.scale / view.ox / view.oy convert between them.
+// view.scale / view.ox / view.oy convert between them:  screen = offset + image × scale
 
-import { simplify, distToSegment, polygonArea, clamp } from './geometry.js';
+import { simplify, distToSegment, polygonArea, clamp, zoomAt, clampPan } from './geometry.js';
 
 const HANDLE = 5; // half the size of a dot, in screen px
 const HIT = 9; // how close the mouse must be to grab a dot
 const EDGE_HIT = 7; // how close the mouse must be to a line to add a dot
 const MIN_STEP = 3; // min screen px between recorded points while tracing
-const PAD = 24; // empty space around the image inside the canvas
+const PAD = 24; // empty space around the image when it's fitted
+const PAN_MARGIN = 60; // at least this much of the image always stays on screen
+const MAX_ZOOM = 8; // 800%: one image pixel = 8 screen pixels
+const WHEEL_SPEED = 0.0015; // how strongly one wheel "notch" zooms
 const HISTORY_LIMIT = 100;
 
 const INK = '#2b2c30';
+const DEFAULT_TRACE = '#ff0000'; // pure red; users can change it in the TRACE LINE panel
 
 export function createEditor(canvas, callbacks = {}) {
   const ctx = canvas.getContext('2d');
@@ -26,6 +30,8 @@ export function createEditor(canvas, callbacks = {}) {
     mode: 'empty', // empty | ready | tracing | editing
     history: [], // snapshots of `points` for undo
     view: { scale: 1, ox: 0, oy: 0 },
+    fitScale: 1, // the scale that shows the whole image (also the minimum zoom)
+    isFit: true, // still at the fitted view? (then window resizes re-fit)
     cssW: 0,
     cssH: 0,
     dpr: 1,
@@ -33,6 +39,10 @@ export function createEditor(canvas, callbacks = {}) {
     dragSnapshot: null, // points before the drag started
     dragMoved: false,
     hover: -1,
+    spaceDown: false, // space held = pan mode
+    pan: null, // { startX, startY, ox, oy } while panning
+    lastTraceScreen: null,
+    traceColor: DEFAULT_TRACE,
     antOffset: 0,
     lastAnt: 0,
     dirty: true,
@@ -65,7 +75,7 @@ export function createEditor(canvas, callbacks = {}) {
     if (s.history.length > HISTORY_LIMIT) s.history.shift();
   }
 
-  // ---------- sizing ----------
+  // ---------- sizing, fitting and zooming ----------
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
@@ -75,19 +85,57 @@ export function createEditor(canvas, callbacks = {}) {
     // The canvas's real pixel size is CSS size × devicePixelRatio, so it stays sharp on high-DPI screens.
     canvas.width = Math.max(1, Math.round(rect.width * s.dpr));
     canvas.height = Math.max(1, Math.round(rect.height * s.dpr));
-    fit();
+    if (s.img) {
+      s.fitScale = computeFitScale();
+      if (s.isFit) fit();
+      else setView(s.view);
+    }
     s.dirty = true;
   }
+
+  function computeFitScale() {
+    const iw = s.img.naturalWidth;
+    const ih = s.img.naturalHeight;
+    const scale = Math.min((s.cssW - PAD * 2) / iw, (s.cssH - PAD * 2) / ih, 4);
+    return Math.max(scale, 0.01);
+  }
+
+  // The smallest and largest allowed zoom. A tiny image may already fit at more than 800%.
+  const minScale = () => Math.min(s.fitScale, MAX_ZOOM);
+  const maxScale = () => Math.max(s.fitScale, MAX_ZOOM);
 
   // Scale the image to fit inside the canvas and centre it.
   function fit() {
     if (!s.img) return;
-    const iw = s.img.naturalWidth;
-    const ih = s.img.naturalHeight;
-    const scale = Math.min((s.cssW - PAD * 2) / iw, (s.cssH - PAD * 2) / ih, 4);
-    s.view.scale = Math.max(scale, 0.01);
-    s.view.ox = (s.cssW - iw * s.view.scale) / 2;
-    s.view.oy = (s.cssH - ih * s.view.scale) / 2;
+    s.fitScale = computeFitScale();
+    s.view = {
+      scale: s.fitScale,
+      ox: (s.cssW - s.img.naturalWidth * s.fitScale) / 2,
+      oy: (s.cssH - s.img.naturalHeight * s.fitScale) / 2,
+    };
+    s.isFit = true;
+    viewChanged();
+  }
+
+  // Every view change goes through here, so the image can never be pushed out of sight.
+  function setView(view) {
+    s.view = clampPan(view, s.img.naturalWidth, s.img.naturalHeight, s.cssW, s.cssH, PAN_MARGIN);
+    viewChanged();
+  }
+
+  function viewChanged() {
+    // Mid-trace, keep the "last recorded point" in step with the new view.
+    if (s.mode === 'tracing' && s.points.length) {
+      s.lastTraceScreen = imageToScreen(s.points[s.points.length - 1]);
+    }
+    s.dirty = true;
+    callbacks.onZoom?.(Math.round(s.view.scale * 100));
+  }
+
+  function zoomBy(factor, anchor = { x: s.cssW / 2, y: s.cssH / 2 }) {
+    if (!s.img) return;
+    setView(zoomAt(s.view, factor, anchor, minScale(), maxScale()));
+    s.isFit = false;
   }
 
   new ResizeObserver(resize).observe(canvas);
@@ -138,18 +186,75 @@ export function createEditor(canvas, callbacks = {}) {
     return -1;
   }
 
+  function canPan() {
+    return Boolean(s.img) && s.mode !== 'tracing' && s.drag < 0;
+  }
+
   function updateCursor() {
     let c = 'default';
-    if (s.mode === 'ready' || s.mode === 'tracing') c = 'trace';
+    if (s.pan) c = 'panning';
+    else if (s.spaceDown && canPan()) c = 'pan';
+    else if (s.mode === 'ready' || s.mode === 'tracing') c = 'trace';
     else if (s.mode === 'editing') c = s.drag >= 0 ? 'grabbing' : s.hover >= 0 ? 'grab' : 'default';
     canvas.dataset.cursor = c;
   }
+
+  // ---------- keyboard: hold space to pan ----------
+
+  // Typing a space into a text box shouldn't start panning.
+  const typing = (el) => el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && el.type !== 'range' && el.type !== 'checkbox' && el.type !== 'radio');
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || typing(document.activeElement) || !s.img) return;
+    // Stops the page scrolling and a focused button "clicking".
+    e.preventDefault();
+    if (!s.spaceDown) {
+      s.spaceDown = true;
+      updateCursor();
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space' || !s.spaceDown) return;
+    e.preventDefault(); // buttons activate on keyup for space, so block it here too
+    s.spaceDown = false;
+    updateCursor();
+  });
+
+  // If the window loses focus mid-pan, the keyup never arrives. Reset instead of getting stuck.
+  window.addEventListener('blur', () => {
+    s.spaceDown = false;
+    s.pan = null;
+    updateCursor();
+  });
+
+  // ---------- mouse wheel: zoom toward the cursor ----------
+
+  canvas.addEventListener(
+    'wheel',
+    (e) => {
+      if (!s.img) return;
+      e.preventDefault(); // otherwise the page scrolls too
+      // Trackpads send many small deltas, mice send big ones. exp() turns either into a smooth factor:
+      // deltaY = +100 → e^(−0.15) ≈ 0.86 (zoom out), deltaY = −100 → e^(0.15) ≈ 1.16 (zoom in).
+      const delta = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY; // some mice report "lines", not pixels
+      zoomBy(Math.exp(-delta * WHEEL_SPEED), eventToScreen(e));
+    },
+    { passive: false }, // needed so preventDefault() is allowed
+  );
 
   // ---------- pointer events ----------
 
   canvas.addEventListener('pointerdown', (e) => {
     if (!s.img || e.button !== 0) return;
     const sp = eventToScreen(e);
+
+    if (s.spaceDown && canPan()) {
+      s.pan = { startX: sp.x, startY: sp.y, ox: s.view.ox, oy: s.view.oy };
+      canvas.setPointerCapture(e.pointerId);
+      updateCursor();
+      return;
+    }
 
     if (s.mode === 'editing') {
       const i = dotAt(sp);
@@ -175,6 +280,12 @@ export function createEditor(canvas, callbacks = {}) {
   canvas.addEventListener('pointermove', (e) => {
     if (!s.img) return;
     const sp = eventToScreen(e);
+
+    if (s.pan) {
+      setView({ scale: s.view.scale, ox: s.pan.ox + sp.x - s.pan.startX, oy: s.pan.oy + sp.y - s.pan.startY });
+      s.isFit = false;
+      return;
+    }
 
     if (s.mode === 'tracing') {
       const last = s.lastTraceScreen;
@@ -204,7 +315,10 @@ export function createEditor(canvas, callbacks = {}) {
   });
 
   function endPointer() {
-    if (s.mode === 'tracing') {
+    if (s.pan) {
+      s.pan = null;
+      updateCursor();
+    } else if (s.mode === 'tracing') {
       finishTrace();
     } else if (s.drag >= 0) {
       if (s.dragMoved) {
@@ -229,7 +343,7 @@ export function createEditor(canvas, callbacks = {}) {
   });
 
   canvas.addEventListener('dblclick', (e) => {
-    if (s.mode !== 'editing') return;
+    if (s.mode !== 'editing' || s.spaceDown) return;
     const sp = eventToScreen(e);
     const i = dotAt(sp);
     if (i >= 0) {
@@ -280,7 +394,8 @@ export function createEditor(canvas, callbacks = {}) {
     const iw = s.img.naturalWidth * scale;
     const ih = s.img.naturalHeight * scale;
 
-    ctx.imageSmoothingEnabled = true;
+    // Zoomed in past 100%: show hard-edged pixels instead of a blur, so edges are easy to follow.
+    ctx.imageSmoothingEnabled = scale < 1;
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(s.img, ox, oy, iw, ih);
 
@@ -292,10 +407,11 @@ export function createEditor(canvas, callbacks = {}) {
       for (const p of pts) ctx.lineTo(p.x, p.y);
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
+      // A thin white edge under the coloured line keeps it visible on any image.
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 4;
       ctx.stroke();
-      ctx.strokeStyle = INK;
+      ctx.strokeStyle = s.traceColor;
       ctx.lineWidth = 2;
       ctx.stroke();
       return;
@@ -316,15 +432,16 @@ export function createEditor(canvas, callbacks = {}) {
     ctx.fillStyle = 'rgba(30, 31, 35, 0.5)';
     ctx.fill(outside, 'evenodd');
 
-    // "Marching ants" border: a white line with a moving dark dashed line on top.
+    // "Marching ants" border: a white line with a moving coloured dashed line on top.
     ctx.lineJoin = 'round';
-    ctx.lineWidth = 2;
     ctx.setLineDash([]);
+    ctx.lineWidth = 3;
     ctx.strokeStyle = '#ffffff';
     ctx.stroke(shape);
+    ctx.lineWidth = 2;
     ctx.setLineDash([6, 6]);
     ctx.lineDashOffset = -s.antOffset;
-    ctx.strokeStyle = INK;
+    ctx.strokeStyle = s.traceColor;
     ctx.stroke(shape);
     ctx.setLineDash([]);
 
@@ -366,6 +483,7 @@ export function createEditor(canvas, callbacks = {}) {
       s.history = [];
       s.hover = -1;
       s.drag = -1;
+      s.pan = null;
       fit();
       setMode('ready');
       shapeChanged();
@@ -384,6 +502,17 @@ export function createEditor(canvas, callbacks = {}) {
       s.hover = -1;
       setMode('ready');
       shapeChanged();
+    },
+    zoomIn() {
+      zoomBy(1.25);
+    },
+    zoomOut() {
+      zoomBy(0.8);
+    },
+    fit,
+    setTraceColor(color) {
+      s.traceColor = color;
+      s.dirty = true;
     },
     get mode() {
       return s.mode;

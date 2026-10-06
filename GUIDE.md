@@ -20,6 +20,11 @@ A record of what Snip Snip is, why it's built the way it is, and how every part 
   - Double-click a dot to remove it (a shape always keeps at least 3)
   - **Undo** button or Ctrl + Z
   - **Retrace** clears the shape so you can draw a new one (also undoable)
+- Zoom and pan (for fine cuts)
+  - Scroll the mouse wheel to zoom toward the cursor
+  - Toolbar `−` / `+` zoom toward the middle of the view, the label shows the zoom %, and `fit` shows the whole image again
+  - Hold space and drag to move around
+  - Zoom range: the fitted size up to 800%
 - Output
   - The sticker preview updates live as you edit
   - Optional outline: on/off toggle, thickness slider (2–60 px), colour (white, silver, black)
@@ -40,8 +45,20 @@ A record of what Snip Snip is, why it's built the way it is, and how every part 
 - **Output:** plain transparent cutout by default, outline is an optional toggle
 - **Devices:** desktop only for v1 (it still doesn't break on a narrow window)
 - **Theme:** 8-bit, mostly white / silver / gray, with one tiny accent (the panda's pink blush)
-- **Mascot:** a pixel panda that gives hints and reacts (blinks, hops when you copy or download)
+- **Mascot:** a pixel panda that gives hints and reacts
+  - Original art in a chunky black-outline style (inspired by reference pictures, not copied from them)
+  - Loops through sleeping (breathing + floating z's), sitting (blinks), and eating bamboo (chews), about 8 seconds each
+  - Copy or download → happy pose with arms up and a hop for about 2 seconds, then back to sitting
+  - Bamboo is soft sage green, the second small accent colour after the blush
 - **Hosting:** GitHub repo + Vercel, same as Encore
+- **Trace colour:** user's choice in a TRACE LINE panel (under OUTLINE), default pure red `255,0,0`
+  - Options: red `#ff0000`, lime `#00ff00`, cyan `#00ffff`, magenta `#ff00ff`, yellow `#ffff00`
+  - Deliberately *not* matched to the gray UI: these are tools for seeing what you're cutting, so maximum contrast wins
+  - Used while drawing and for the finished border, always over a thin white edge. Dots stay white/black
+  - Remembered between visits with `localStorage`
+- **Zoom:** scroll wheel toward the cursor + `−` / `+` / `fit` buttons, from fit size up to 800%
+- **Pan:** hold space + drag (same as Photoshop and Figma). Blocked mid-trace, but scroll-zoom still works mid-trace
+- **Sleeping panda:** eye patches are solid black. Blinking while awake keeps the white closed-eye line
 
 ---
 
@@ -60,9 +77,11 @@ snip-snip/
     ├── editor.js         the big canvas: drawing, tracing, editing dots, undo
     ├── geometry.js       pure math helpers (simplify, distances, area, bounds)
     ├── sticker.js        builds the PNG + copy/download helpers
-    ├── panda.js          draws the pixel panda from text grids
+    ├── panda.js          draws the panda and runs its pose loop (state machine)
+    ├── pandaArt.js       the panda's pixel art + frame building (no DOM, testable)
     ├── style.css         the 8-bit theme
-    └── geometry.test.js  unit tests for geometry.js
+    ├── geometry.test.js  unit tests for geometry.js
+    └── pandaArt.test.js  unit tests for the panda frames
 ```
 
 - Why it's split this way
@@ -163,8 +182,67 @@ snip-snip/
   - With `evenodd`, a pixel is filled if it's inside an *odd* number of shapes
     - Outside the polygon but inside the rectangle: inside 1 shape → filled (dimmed)
     - Inside the polygon: inside 2 shapes → not filled (stays bright)
-- **Marching ants**: a solid white line, then a dark dashed line on top whose `lineDashOffset` changes every 90 ms, which makes the dashes crawl
+- **Trace line (while drawing)**: a 4px white line with a 2px line in the chosen trace colour on top
+  - The white edge keeps it visible even when the image is the same colour as the line
+- **Marching ants (finished shape)**: a 3px white line, then a dashed line in the trace colour on top whose `lineDashOffset` changes every 90 ms, which makes the dashes crawl
+- **Dots** stay white squares with dark edges (dark when hovered), so they stand out from the red line
 - **Redraw loop**: `requestAnimationFrame` runs every frame, but only actually draws when a `dirty` flag is set. This keeps CPU use low while nothing is changing
+
+### 5.7b Zoom and pan
+
+- **Everything zoom-related is just the `view` object** (`scale`, `ox`, `oy`) from 5.1
+  - Points are stored in image coordinates, so zooming never changes the shape. Only how it's drawn and how mouse positions are converted
+  - Dots and lines are drawn in screen pixels, so they stay the same size at every zoom
+- **What the % means**
+  - `scale` = screen pixels per image pixel, so the label is `scale × 100`
+  - 100% → one image pixel per screen pixel. 800% → each image pixel is an 8 × 8 block
+  - The minimum is the "fit" scale, which is often small for big photos (e.g. 14% for a 1773 × 3839 phone screenshot)
+- **Zooming toward the cursor (`zoomAt` in `geometry.js`)**
+  - Goal: the image pixel under the mouse should still be under the mouse after zooming
+  - The image pixel under screen point `a` is `(a − ox) / scale`
+  - After multiplying the scale by `k`, that pixel's distance from the image corner on screen grows by `k`, so the corner must move: `ox' = a − (a − ox) × k`
+  - Worked example: `scale = 0.5`, `ox = 100`, mouse at `x = 300`, zoom ×2
+    - Pixel under the mouse before: (300 − 100) / 0.5 = 200 / 0.5 = **400**
+    - New scale: 0.5 × 2 = 1, so k = 1 / 0.5 = 2
+    - New offset: ox' = 300 − (300 − 100) × 2 = 300 − 400 = **−100**
+    - Pixel under the mouse after: (300 − (−100)) / 1 = 400 / 1 = **400** ✓ same pixel
+  - The scale is clamped to [fit, 800%] first, and `k` uses the scale *after* clamping, so hitting the limit doesn't make the image jump
+- **Why the wheel uses `Math.exp`**
+  - Mice send one big event (`deltaY` ≈ 100 per notch), trackpads send lots of small ones
+  - Factor = e^(−deltaY × 0.0015)
+    - One mouse notch: e^(−100 × 0.0015) = e^(−0.15) ≈ **0.86** (zoom out 14%)
+    - Ten trackpad events of 10: (e^(−0.015))¹⁰ = e^(−0.15) ≈ **0.86**, exactly the same
+  - Because e^a × e^b = e^(a+b), the total zoom only depends on the total scroll, not how it was split into events
+  - `passive: false` on the wheel listener is required, or the browser won't let `preventDefault()` stop the page scrolling
+- **Panning (hold space + drag)**
+  - `keydown` Space sets `spaceDown`, `keyup` clears it, and the cursor becomes a hand
+  - On drag: `ox = startOx + (mouseX − startMouseX)`, same for `oy`
+  - `preventDefault()` on both keydown and keyup, because a focused button "clicks" when space is released, and the page would otherwise scroll
+  - On window `blur` (e.g. alt-tab), pan mode resets, since the keyup would never arrive
+  - Panning is blocked while tracing (the mouse is busy drawing), but scroll-zoom works mid-trace because points are in image coordinates
+- **Keeping the image on screen (`clampPan`)**
+  - At least 60 screen px of the image always stays visible
+  - `ox` must stay between `60 − imageWidthOnScreen` (right edge can't pass the left side) and `viewWidth − 60` (left edge can't pass the right side)
+- **Sharp pixels when zoomed in**
+  - `imageSmoothingEnabled = scale < 1`
+  - Below 100%, smoothing averages pixels so the shrunk image looks clean
+  - Above 100%, smoothing would blur the edges you're trying to follow, so each pixel is drawn as a crisp square instead
+- **Window resizing**
+  - If you're still at the fitted view, the image re-fits to the new size. If you've zoomed or panned, your view is kept (just clamped)
+
+### 5.7c Trace line colour and `localStorage`
+
+- The editor keeps `traceColor` in its state, and `setTraceColor()` changes it and sets the `dirty` flag, so the next frame redraws in the new colour (even mid-trace)
+- **`localStorage`** is a small key-value store the browser keeps for each website
+  - `localStorage.setItem('snip-snip:traceColor', '#00ffff')` saves, `getItem(...)` reads it back on the next visit
+  - Values are always strings, and it's per browser and per site, so it never leaves the user's computer
+  - The key is prefixed with `snip-snip:` so it can't clash with anything else on the same domain (e.g. if Vercel previews share one)
+- **Why the `try/catch`**
+  - Some browsers throw an error on `localStorage` when storage is blocked (strict privacy settings, some private windows)
+  - Without the `try/catch`, that error would stop the rest of `main.js` from running, and the whole app would break over a colour preference
+  - With it, the colour still works for the visit, it just isn't saved
+- **Why the saved value is checked against the list**
+  - Anything in `localStorage` could be old or edited by hand. Only one of the five known colours is accepted, otherwise it falls back to red
 
 ### 5.8 Undo
 
@@ -227,11 +305,45 @@ snip-snip/
 
 ### 5.14 The panda
 
-- Drawn from text grids where each character is one pixel: `k` black fur, `w` white fur, `p` blush, `.` empty
-- **Auto-outline:** any empty pixel touching a filled pixel (up, down, left or right) is painted dark gray, so the white fur shows up against the white page
-- **Moods** just swap the four eye rows: `normal`, `happy` (^ ^ eyes, plus a hop animation), and `blink`
-- Blinks at a random interval (2.5–5.5 s) so it doesn't feel robotic
-- `say(text, { mood, ms, fallback })` shows a message, and after `ms` goes back to the current hint
+- **Two files, two jobs**
+  - `pandaArt.js` only builds frames: "given a pose and a time, which pixel is which colour?" It never touches the page, so it can be unit tested
+  - `panda.js` paints those frames on a canvas and decides which pose to show
+- **Pixel art as text grids**
+  - Each character is one pixel: `k` black, `w` white, `p` blush, `g`/`G` bamboo, `.` see-through
+  - The face is symmetric, so only the left half is written and `sym()` mirrors it
+    - Example: `sym('.kw')` → `'.kw' + 'wk.'` = `'.kwwk.'`
+    - This halves the typing and guarantees both eyes match
+  - The head is built from pieces (top, eyes, mouth, bottom), so moods just swap pieces
+    - Eyes: `open`, `closed` (blink: a white line through the patch), `asleep` (solid black patches), `happy` (^ ^)
+    - Mouth: `shut` or `open` (for chewing)
+- **Composing a frame**
+  - Start with an empty 34 × 28 grid of `.`
+  - `place(buffer, sprite, x, y)` stamps a part on top. `.` in the part is skipped, so earlier layers show through
+  - Order matters, like layers in a drawing app: body first, then head, then bamboo and paw in front
+- **Animation is just "what time is it?"**
+  - `composePose(pose, t)` gets `t` = milliseconds since the pose started, and works out the frame from that
+  - **Breathing** (sleep): every 2.4 s cycle, the first 1.2 s uses a back that's one row taller
+    - `stretch()` repeats one middle row, so the back rises by exactly 1 pixel
+  - **z's** (sleep): three letters, each born 0.8 s after the last, each living 2.4 s
+    - Life progress `k` goes 0 → 1, and the letter moves up 8 px and right 8 px over its life
+    - Fade: `k` from 0 to 0.15 → fading in, 0.15 to 0.7 → solid, 0.7 to 1 → fading out
+      - Example at `k = 0.85`: opacity = (1 − 0.85) / 0.3 = 0.15 / 0.3 = **0.5**
+    - Opacity is drawn with the canvas's `globalAlpha`
+    - `%` (remainder) makes it loop forever: `t = 3000` and `LIFE = 2400` gives `3000 % 2400 = 600`, so it's 600 ms into its second life
+  - **Chewing** (eat): one bite every 700 ms
+    - First half of a bite: paw lifted 1 px and mouth open. Second half: paw down, mouth shut
+    - Bite number = `Math.floor(t / 700)`. Stalk length = `9 − (bite % 4)`, so it goes 9, 8, 7, 6 rows, then a fresh 9-row stalk
+      - Example at `t = 2200`: bite = ⌊2200 / 700⌋ = ⌊3.14⌋ = 3, length = 9 − (3 % 4) = 9 − 3 = **6**
+  - **Blinking** (sit and eat): `panda.js` picks a random time 2.5–5.5 s ahead, then shows closed eyes for 150 ms
+- **The state machine (`panda.js`)**
+  - States: `sleep`, `sit`, `eat`, `happy`
+  - Every 100 ms a `tick()` runs
+    - If the current loop pose has lasted 8 s → move to the next one in `sleep → sit → eat → sleep…`
+    - If it's `happy` and its time is up → go to `sit` and continue the loop from there
+  - `say(text, { mood: 'happy' })` jumps to `happy` from anywhere (copy and download use this)
+  - Why a state machine: each state only needs to know its own exit rules, which keeps the logic small and easy to extend (e.g. adding a "waving" pose is one new state)
+- **Accessibility**
+  - With `prefers-reduced-motion`, time is frozen at 0: no breathing, chewing, z's, blinking or hopping, and the panda stays sitting (it still shows the happy face on copy/download)
 
 ---
 
@@ -270,15 +382,22 @@ snip-snip/
 
 ## 7. Testing
 
-- `npm test` runs `src/geometry.test.js` (12 tests)
+- `npm test` runs 22 tests across two files
   - `distToSegment`: middle of a segment, past the end, zero-length segment
   - `simplify`: straight line → 2 points, L-shape keeps its corner, epsilon controls detail, short input is copied not reused, 20,000-point circle doesn't overflow
   - `polygonArea`: square in both directions, triangle
   - `bounds` and `clamp`
+  - `zoomAt`: the pixel under the mouse stays put, clamping only moves by the zoom that actually happened
+  - `clampPan`: the image can't leave the view, a fine view is left alone
+  - `pandaArt`: sleeping eyes are solid black, every pose and time gives a full 34 × 28 grid of known colours, blinking changes the face, breathing makes the back taller, z's only appear while sleeping with opacity between 0 and 1, the bamboo shrinks per bite and resets
 - Manual checklist before deploying
   - Load by file, drag-drop, and paste
   - Trace, drag a dot, add a dot, remove a dot, undo each, retrace, undo the retrace
   - Toggle the outline, change thickness and colour, check the preview updates
+  - Scroll to zoom on a detail, pan with space + drag, trace at high zoom, zoom out mid-trace, press `fit`
+  - Focus a button with Tab, then hold space: it should pan, not press the button
+  - Switch the trace colour mid-trace and in edit mode, reload, and check the choice is remembered
+  - Watch the panda go sleep → sit → eat, and check it cheers on copy/download
   - Copy and paste the sticker into Discord or Google Docs, and download it
   - Try a very small trace (panda should complain) and a non-image file
 
@@ -294,10 +413,14 @@ snip-snip/
   - Ramer–Douglas–Peucker simplification with a zoom-aware epsilon, written iteratively to avoid stack overflow, and unit tested
 - **"How does the outline work?"**
   - Stroke at twice the width because strokes are centred on the path, round joins for a die-cut look
+- **"How does zoom toward the cursor work?"**
+  - Solve for the new offset so the image pixel under the cursor is unchanged: `ox' = a − (a − ox) × k`, with an exponential wheel factor so mice and trackpads feel the same
 - **Performance**
   - Dirty-flag render loop, debounced PNG generation, token check against out-of-order async results
 - **Memory**
   - Revoking object URLs, capped undo history
+- **Robustness**
+  - `localStorage` wrapped in `try/catch` with validated values, so a blocked or corrupted setting can't break the app
 - **Privacy**
   - Fully client-side, so no server costs and no user images stored anywhere
 - **Trade-off you could mention**
@@ -307,7 +430,7 @@ snip-snip/
 
 ## 9. Ideas for later
 
-- Zoom and pan on the canvas for precise tracing on big images
+- A small zoomed-in loupe next to the cursor while tracing
 - Magnetic lasso / edge snapping (snap the trace to strong edges in the image)
 - Automatic background removal (an in-browser segmentation model)
 - Feathered (soft) edges as an option

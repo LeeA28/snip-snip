@@ -98,21 +98,10 @@ body {
 
 .panda {
   image-rendering: pixelated;
-  animation: bob 1.4s steps(1) infinite;
 }
 
 .panda.hop {
   animation: hop 0.5s steps(1) infinite;
-}
-
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
 }
 
 @keyframes hop {
@@ -128,7 +117,7 @@ body {
 .bubble {
   position: relative;
   order: -1; /* bubble to the left of the panda */
-  margin-bottom: 44px;
+  margin-bottom: 86px;
   max-width: 260px;
   padding: 8px 12px;
   background: var(--hi);
@@ -223,10 +212,12 @@ body {
 #stageCanvas[data-cursor='trace'] {
   cursor: url('/cursor-trace.svg') 16 16, crosshair;
 }
-#stageCanvas[data-cursor='grab'] {
+#stageCanvas[data-cursor='grab'],
+#stageCanvas[data-cursor='pan'] {
   cursor: grab;
 }
-#stageCanvas[data-cursor='grabbing'] {
+#stageCanvas[data-cursor='grabbing'],
+#stageCanvas[data-cursor='panning'] {
   cursor: grabbing;
 }
 
@@ -271,9 +262,32 @@ body {
 
 .toolbar {
   display: flex;
+  align-items: center;
   gap: 14px;
   margin-top: 18px;
   flex-wrap: wrap;
+}
+
+.zoom-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto; /* push zoom controls to the right end of the toolbar */
+}
+
+.px-btn.square {
+  width: 38px;
+  padding-left: 0;
+  padding-right: 0;
+  font-size: 12px;
+}
+
+.zoom-label {
+  min-width: 64px;
+  text-align: center;
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  color: var(--edge);
 }
 
 /* ============ buttons ============ */
@@ -477,6 +491,10 @@ input[type='range']:focus-visible {
   margin-top: 14px;
 }
 
+.swatches.flush {
+  margin-top: 0;
+}
+
 .swatch {
   display: flex;
   align-items: center;
@@ -561,7 +579,6 @@ input[type='range']:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .panda,
   .panda.hop,
   .bubble.pop {
     animation: none;
