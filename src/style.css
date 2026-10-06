@@ -1,0 +1,569 @@
+/* ============ palette ============ */
+:root {
+  --bg: #eceef1;
+  --panel: #fbfbfc;
+  --ink: #2b2c30;
+  --edge: #5d5f66; /* pixel borders */
+  --muted: #8a8c93;
+  --silver: #c9cbd1;
+  --silver-2: #dfe1e5;
+  --hi: #ffffff;
+  --shade: #b4b7bd;
+  --drop: rgba(93, 95, 102, 0.28);
+  --blush: #f2c4ca; /* the one tiny accent */
+
+  --font-pixel: 'Press Start 2P', monospace;
+  --font-body: 'VT323', monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg);
+  background-image: url('/sparkles.svg');
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 20px;
+  line-height: 1.2;
+  -webkit-font-smoothing: none;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ============ pixel borders ============
+   Four box-shadows (top, bottom, left, right) with no blur draw a border
+   that skips the corners, which gives the notched 8-bit look. */
+.panel,
+.bubble {
+  box-shadow:
+    0 -4px 0 0 var(--edge),
+    0 4px 0 0 var(--edge),
+    -4px 0 0 0 var(--edge),
+    4px 0 0 0 var(--edge),
+    0 10px 0 0 var(--drop);
+}
+
+/* ============ header ============ */
+.topbar {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px 28px 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-size: 44px;
+  letter-spacing: 6px;
+  color: var(--hi);
+  /* stacked hard shadows = chunky pixel outline */
+  text-shadow:
+    3px 0 0 var(--edge),
+    -3px 0 0 var(--edge),
+    0 3px 0 var(--edge),
+    0 -3px 0 var(--edge),
+    3px 3px 0 var(--edge),
+    -3px -3px 0 var(--edge),
+    3px -3px 0 var(--edge),
+    -3px 3px 0 var(--edge),
+    6px 6px 0 var(--silver);
+}
+
+.tagline {
+  margin: 14px 0 0;
+  font-size: 22px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+.mascot {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+}
+
+.panda {
+  image-rendering: pixelated;
+  animation: bob 1.4s steps(1) infinite;
+}
+
+.panda.hop {
+  animation: hop 0.5s steps(1) infinite;
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+.bubble {
+  position: relative;
+  order: -1; /* bubble to the left of the panda */
+  margin-bottom: 44px;
+  max-width: 260px;
+  padding: 8px 12px;
+  background: var(--hi);
+  font-size: 21px;
+}
+
+/* little pixel tail pointing at the panda */
+.bubble::after {
+  content: '';
+  position: absolute;
+  right: -12px;
+  bottom: 6px;
+  width: 8px;
+  height: 8px;
+  background: var(--hi);
+  box-shadow:
+    4px 0 0 0 var(--edge),
+    0 4px 0 0 var(--edge),
+    4px 4px 0 0 var(--edge);
+}
+
+.bubble.pop {
+  animation: pop 0.25s steps(2);
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ============ layout ============ */
+.app {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 28px 28px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 36px;
+  align-items: start;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+.panel {
+  background: var(--panel);
+  padding: 16px;
+}
+
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: -4px 0 14px;
+  font-family: var(--font-pixel);
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--edge);
+}
+
+.status {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  color: var(--muted);
+}
+
+/* ============ stage ============ */
+.stage {
+  position: relative;
+  height: max(460px, calc(100vh - 300px));
+  background: repeating-conic-gradient(#e6e8eb 0 25%, #f4f5f7 0 50%) 0 0 / 20px 20px;
+  box-shadow: inset 0 0 0 3px var(--silver-2);
+  overflow: hidden;
+}
+
+#stageCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  user-select: none;
+}
+
+#stageCanvas[data-cursor='trace'] {
+  cursor: url('/cursor-trace.svg') 16 16, crosshair;
+}
+#stageCanvas[data-cursor='grab'] {
+  cursor: grab;
+}
+#stageCanvas[data-cursor='grabbing'] {
+  cursor: grabbing;
+}
+
+.dropzone,
+.drag-over {
+  position: absolute;
+  inset: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+  color: var(--muted);
+  border: 4px dashed var(--silver);
+}
+
+.dropzone p {
+  margin: 4px 0;
+}
+
+.drop-big {
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  color: var(--edge);
+  margin-bottom: 8px !important;
+}
+
+.dropzone .hint {
+  margin-top: 14px;
+  font-size: 18px;
+}
+
+.drag-over {
+  background: rgba(251, 251, 252, 0.88);
+  border-color: var(--edge);
+  font-family: var(--font-pixel);
+  font-size: 13px;
+  color: var(--edge);
+  pointer-events: none;
+}
+
+.toolbar {
+  display: flex;
+  gap: 14px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+/* ============ buttons ============ */
+.px-btn {
+  font-family: var(--font-pixel);
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--ink);
+  background: var(--silver-2);
+  border: none;
+  padding: 11px 14px;
+  margin: 3px;
+  cursor: pointer;
+  box-shadow:
+    0 -3px 0 0 var(--edge),
+    0 3px 0 0 var(--edge),
+    -3px 0 0 0 var(--edge),
+    3px 0 0 0 var(--edge),
+    inset -3px -3px 0 0 var(--shade),
+    inset 3px 3px 0 0 var(--hi);
+}
+
+.px-btn:hover:not(:disabled) {
+  background: #e9ebee;
+}
+
+.px-btn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow:
+    0 -3px 0 0 var(--edge),
+    0 3px 0 0 var(--edge),
+    -3px 0 0 0 var(--edge),
+    3px 0 0 0 var(--edge),
+    inset 3px 3px 0 0 var(--shade);
+}
+
+.px-btn:focus-visible {
+  outline: 3px dashed var(--edge);
+  outline-offset: 6px;
+}
+
+.px-btn:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+  background: #eef0f2;
+  box-shadow:
+    0 -3px 0 0 var(--silver),
+    0 3px 0 0 var(--silver),
+    -3px 0 0 0 var(--silver),
+    3px 0 0 0 var(--silver);
+}
+
+.px-btn.primary:not(:disabled) {
+  background: var(--hi);
+}
+
+/* ============ sticker preview ============ */
+.preview {
+  height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  box-shadow: inset 0 0 0 3px var(--silver-2);
+}
+
+.checker {
+  background: repeating-conic-gradient(#e6e8eb 0 25%, #f7f8f9 0 50%) 0 0 / 14px 14px;
+}
+
+.preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 0 var(--drop));
+}
+
+.preview .empty {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+/* ============ outline controls ============ */
+.px-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.px-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.track {
+  position: relative;
+  width: 44px;
+  height: 22px;
+  background: var(--silver-2);
+  box-shadow:
+    0 -3px 0 0 var(--edge),
+    0 3px 0 0 var(--edge),
+    -3px 0 0 0 var(--edge),
+    3px 0 0 0 var(--edge);
+  margin: 3px;
+}
+
+.knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--muted);
+  transition: left 0.12s steps(3);
+}
+
+.px-toggle input:checked + .track {
+  background: var(--hi);
+}
+
+.px-toggle input:checked + .track .knob {
+  left: 25px;
+  background: var(--ink);
+}
+
+.px-toggle input:focus-visible + .track {
+  outline: 3px dashed var(--edge);
+  outline-offset: 6px;
+}
+
+.outline-opts {
+  margin-top: 16px;
+  transition: opacity 0.15s;
+}
+
+.outline-opts.off {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.slider-row {
+  display: grid;
+  grid-template-columns: auto 1fr 28px;
+  align-items: center;
+  gap: 10px;
+}
+
+.num {
+  text-align: right;
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--silver);
+  outline: none;
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 20px;
+  background: var(--hi);
+  border: 3px solid var(--edge);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 10px;
+  height: 16px;
+  background: var(--hi);
+  border: 3px solid var(--edge);
+  border-radius: 0;
+  cursor: pointer;
+}
+
+input[type='range']:focus-visible {
+  outline: 3px dashed var(--edge);
+  outline-offset: 6px;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 14px;
+}
+
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.swatch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.swatch span {
+  width: 18px;
+  height: 18px;
+  background: var(--c);
+  box-shadow: 0 0 0 3px var(--silver);
+  margin: 3px;
+}
+
+.swatch input:checked + span {
+  box-shadow:
+    0 0 0 3px var(--edge),
+    0 0 0 6px var(--hi),
+    0 0 0 8px var(--edge);
+  margin: 0 5px;
+}
+
+.swatch input:focus-visible + span {
+  outline: 3px dashed var(--edge);
+  outline-offset: 10px;
+}
+
+/* ============ help ============ */
+.help ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.help li {
+  position: relative;
+  padding-left: 18px;
+  margin: 6px 0;
+  color: var(--edge);
+}
+
+/* tiny pixel bullet */
+.help li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  background: var(--silver);
+  box-shadow: 0 0 0 2px var(--edge);
+}
+
+.help b {
+  color: var(--ink);
+  font-weight: normal;
+}
+
+/* ============ footer ============ */
+.footer {
+  text-align: center;
+  padding: 8px 0 28px;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+/* Desktop-first, but don't fall apart on a narrow window. */
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .brand h1 {
+    font-size: 32px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panda,
+  .panda.hop,
+  .bubble.pop {
+    animation: none;
+  }
+}

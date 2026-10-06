@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Snip Snip</title>
+    <meta name="description" content="Trace any part of an image and turn it into a sticker you can copy or download." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>SNIP SNIP</h1>
+        <p class="tagline">trace it &middot; cut it &middot; stick it</p>
+      </div>
+      <div class="mascot">
+        <canvas id="panda" class="panda" aria-label="Pixel panda mascot" role="img"></canvas>
+        <div class="bubble" id="bubble" aria-live="polite">hi! drop a pic~</div>
+      </div>
+    </header>
+
+    <main class="app">
+      <section class="panel stage-panel">
+        <div class="panel-title"><span>CANVAS</span><span class="status" id="status"></span></div>
+
+        <div class="stage" id="stage">
+          <canvas id="stageCanvas" data-cursor="default"></canvas>
+          <div class="dropzone" id="dropzone">
+            <p class="drop-big">drop an image here</p>
+            <p>or</p>
+            <button class="px-btn" id="pickBtn" type="button">choose file</button>
+            <p class="hint">you can also paste with ctrl + v</p>
+          </div>
+          <div class="drag-over" id="dragOver" hidden><p>let go to load!</p></div>
+        </div>
+
+        <div class="toolbar">
+          <button class="px-btn" id="newBtn" type="button">new image</button>
+          <button class="px-btn" id="undoBtn" type="button" disabled>undo</button>
+          <button class="px-btn" id="retraceBtn" type="button" disabled>retrace</button>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="panel">
+          <div class="panel-title"><span>STICKER</span><span class="status" id="sizeLabel"></span></div>
+          <div class="preview checker" id="preview">
+            <img id="previewImg" alt="Your cut-out sticker" hidden />
+            <p class="empty" id="previewEmpty">your sticker shows up here</p>
+          </div>
+          <div class="actions">
+            <button class="px-btn primary" id="copyBtn" type="button" disabled>copy</button>
+            <button class="px-btn primary" id="downloadBtn" type="button" disabled>download</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title"><span>OUTLINE</span></div>
+          <label class="px-toggle">
+            <input type="checkbox" id="outlineToggle" />
+            <span class="track" aria-hidden="true"><span class="knob"></span></span>
+            <span>sticker outline</span>
+          </label>
+          <div class="outline-opts" id="outlineOpts">
+            <label class="slider-row">
+              <span>thickness</span>
+              <input type="range" id="outlineWidth" min="2" max="60" step="1" value="12" />
+              <span class="num" id="outlineWidthNum">12</span>
+            </label>
+            <div class="swatches" role="radiogroup" aria-label="Outline colour">
+              <label class="swatch"><input type="radio" name="outlineColor" value="#ffffff" checked /><span style="--c: #ffffff"></span>white</label>
+              <label class="swatch"><input type="radio" name="outlineColor" value="#c9cbd1" /><span style="--c: #c9cbd1"></span>silver</label>
+              <label class="swatch"><input type="radio" name="outlineColor" value="#2b2c30" /><span style="--c: #2b2c30"></span>black</label>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel help">
+          <div class="panel-title"><span>HOW TO</span></div>
+          <ul>
+            <li><b>hold &amp; drag</b> around the part you want</li>
+            <li><b>drag a dot</b> to adjust the shape</li>
+            <li><b>double-click a line</b> to add a dot</li>
+            <li><b>double-click a dot</b> to remove it</li>
+            <li><b>ctrl + z</b> to undo</li>
+          </ul>
+        </section>
+      </aside>
+    </main>
+
+    <footer class="footer">SNIP SNIP v1 &middot; your images never leave your browser</footer>
+
+    <input type="file" id="fileInput" accept="image/*" hidden />
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
