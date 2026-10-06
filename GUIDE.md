@@ -13,7 +13,12 @@ A record of what Snip Snip is, why it's built the way it is, and how every part 
   - Paste from the clipboard with Ctrl + V (great for screenshots)
 - Tracing
   - Hold the mouse button and drag around the part you want
-  - Letting go closes the shape automatically (the last point joins back to the first)
+  - Letting go does **nothing**: the trace stays open, so you can zoom or pan and then keep going
+  - Pressing again continues the trace: a straight line joins where you let go to where you pressed
+  - A ring marks the start point
+  - **close sticker** (SHAPE panel) or **Enter** joins the last point straight back to the start and makes the sticker
+  - **Esc** (or **retrace**) throws the open trace away
+  - Undo removes the last stroke while the trace is open
 - Editing the shape afterwards
   - Drag a dot to move it
   - Double-click a line to add a dot there
@@ -42,6 +47,12 @@ A record of what Snip Snip is, why it's built the way it is, and how every part 
   - Plain JS keeps the "how does the cutout work" explanation framework-free
 - **Build approach:** whole v1 written at once, then reviewed and polished
 - **Tracing style:** freehand lasso (hold and drag), with editable dots afterwards
+- **Open traces:** letting go doesn't close the shape
+  - Why: when zoomed in on a detail, you'd otherwise have to finish the whole outline in one drag
+  - Continuing joins with a straight line from the last end point to wherever you press (works even if the end is off-screen)
+  - Closing is explicit: a **close sticker** button in a SHAPE panel (between STICKER and OUTLINE), or Enter
+  - Undo while open = remove last stroke. Undo right after closing = reopen the trace
+  - Esc and retrace throw the open trace away (undoable)
 - **Output:** plain transparent cutout by default, outline is an optional toggle
 - **Devices:** desktop only for v1 (it still doesn't break on a narrow window)
 - **Theme:** 8-bit, mostly white / silver / gray, with one tiny accent (the panda's pink blush)
@@ -74,13 +85,15 @@ snip-snip/
 │   └── cursor-trace.svg  pixel crosshair cursor used while tracing
 └── src/
     ├── main.js           wires everything together (loading, buttons, preview, panda)
-    ├── editor.js         the big canvas: drawing, tracing, editing dots, undo
+    ├── editor.js         the big canvas: drawing, tracing, editing dots, zoom/pan, undo
+    ├── trace.js          the open trace as plain data: strokes, flatten, can-close check (no DOM)
     ├── geometry.js       pure math helpers (simplify, distances, area, bounds)
     ├── sticker.js        builds the PNG + copy/download helpers
     ├── panda.js          draws the panda and runs its pose loop (state machine)
     ├── pandaArt.js       the panda's pixel art + frame building (no DOM, testable)
     ├── style.css         the 8-bit theme
     ├── geometry.test.js  unit tests for geometry.js
+    ├── trace.test.js     unit tests for trace.js
     └── pandaArt.test.js  unit tests for the panda frames
 ```
 
@@ -130,12 +143,36 @@ snip-snip/
 - `resize()` sets the real size to CSS size × `devicePixelRatio`, then `ctx.setTransform(dpr, …)` lets all drawing code keep using CSS pixels
 - A `ResizeObserver` calls `resize()` whenever the canvas changes size (window resize, layout changes)
 
-### 5.3 Recording the trace
+### 5.3 Recording the trace (strokes and the open trace)
 
-- `pointerdown` starts a trace, `pointermove` adds points, `pointerup` finishes
+- **The editor's modes**
+  - `empty` → no image
+  - `ready` → image loaded, nothing traced
+  - `tracing` → an **open** trace exists (the mouse may be up or down)
+  - `editing` → a **closed** shape with draggable dots
+  - Closing: `tracing → editing`. Undo right after closing: `editing → tracing`. Esc/retrace: back to `ready`
+- **A trace is a list of strokes**
+  - One stroke = one hold-and-drag: `pointerdown` starts it, `pointermove` adds points, `pointerup` ends it
+  - The stroke being drawn lives in `s.current`. On `pointerup` it's simplified and appended to `s.strokes`, and the trace stays open
+  - Consecutive strokes are drawn one after another, so the end of one joins the start of the next with a straight line. Nothing extra is stored for that line: it's implied by the order of the points
+  - `flatten(strokes)` turns the strokes into one list of points (skipping a duplicate if a stroke starts exactly where the last ended)
+  - Example: strokes `[(0,0)→(10,0)]` then `[(10,20)→(0,20)]` flatten to `(0,0), (10,0), (10,20), (0,20)`. The segment `(10,0)→(10,20)` is the straight joining line, and closing adds `(0,20)→(0,0)`
+- **Pointer details**
   - **Pointer events** cover mouse, pen and touch with one API
-- `setPointerCapture` keeps sending moves to the canvas even if the mouse leaves it mid-drag, so a trace can't get "stuck"
-- A new point is only recorded if the mouse moved at least 3 screen pixels, which avoids thousands of near-duplicate points
+  - `setPointerCapture` keeps sending moves to the canvas even if the mouse leaves it mid-drag
+  - A new point is only recorded if the mouse moved at least 3 screen pixels, which avoids thousands of near-duplicate points
+  - A single click (no drag) is kept as a one-point stroke, so clicking around also works like a polygon tool
+- **Closing (`close()`)**
+  - `flatten` the strokes, then check `canClose`: at least 3 points and an area of at least about 10 × 10 *screen* px (`(10 / scale)²` in image px)
+  - If it passes: save the strokes for undo, the flattened points become the shape, mode → `editing`, and the sticker preview builds
+  - If not: the panda says why and the trace stays open, so nothing is lost
+  - The **close sticker** button is only enabled when there's an open trace with 3+ points and the mouse isn't down
+- **Enter and Esc**
+  - Only act while a trace is open and the mouse is up
+  - `preventDefault()` on Enter, because Enter "clicks" a focused button. Without it, closing with focus on **new image** would also open the file picker
+- **Pure logic in `trace.js`**
+  - `addStroke`, `removeLastStroke`, `flatten`, `canClose`, `copyStrokes` never touch the page, so they're unit tested
+  - `addStroke` and `removeLastStroke` return **new** arrays instead of changing the old one. This makes undo snapshots safe: a saved state can't be changed by accident later
 
 ### 5.4 Simplifying the trace (Ramer–Douglas–Peucker)
 
@@ -147,9 +184,11 @@ snip-snip/
   4. If it's not, every point in between is "close enough" to the straight line, so drop them all
 - Why it works: points on straight stretches get dropped, corners and curves (which stick out) get kept
 - `epsilon` is 1.5 *screen* pixels converted to image pixels (`1.5 / scale`), so the result looks equally detailed at any zoom
+  - It's applied **per stroke**, using the zoom that stroke was drawn at
+  - Example with numbers: a stroke drawn at 400% (`scale = 4`) gets epsilon = 1.5 / 4 = **0.375** image px, so tiny details survive. A stroke drawn at 25% (`scale = 0.25`) gets 1.5 / 0.25 = **6** image px, because you couldn't have drawn finer than that anyway
 - Implementation detail: it uses an explicit **stack** instead of recursion, so a huge trace can't cause a stack overflow
 - Complexity: O(n log n) on typical shapes, O(n²) worst case. Fine for a few thousand points
-- Traces that are too small (under 3 points, or area under roughly 10 × 10 screen pixels) are rejected, and the panda says so
+- Shapes that are too small (under 3 points, or area under roughly 10 × 10 screen pixels) can't be closed, and the panda says so
 
 ### 5.5 Polygon area (shoelace formula)
 
@@ -246,10 +285,22 @@ snip-snip/
 
 ### 5.8 Undo
 
-- `history` is a stack of snapshots (copies of the points array)
-- A snapshot is pushed *before* each change: finishing a trace, moving a dot, adding/removing a dot, retracing
-- Undo pops the latest snapshot and restores it
-- Dragging is handled carefully: the snapshot is taken on `pointerdown`, but only pushed if the dot actually moved. Otherwise just clicking a dot (or double-clicking it) would fill the history with duplicate states
+- **Two layers of undo**
+  - **While a trace is open:** undo removes the last stroke (`removeLastStroke`). Removing the last one goes back to `ready`
+  - **Otherwise:** undo pops the `history` stack
+- **History entries are snapshots of either kind**
+  - `{ strokes }` = an open trace, `{ points }` = a closed shape
+  - `restore()` looks at which one it got and switches mode to match
+- **What pushes a snapshot** (always *before* the change)
+  - Closing → pushes the open strokes, so undo reopens the trace exactly as it was
+  - Moving, adding or removing a dot → pushes the shape's points
+  - Retrace / Esc → pushes whatever was there (open strokes or closed points)
+- **Example sequence**
+  - Draw stroke A, stroke B → strokes `[A, B]`, history `[]`
+  - Close → history `[{strokes: [A, B]}]`, shape made
+  - Drag a dot → history `[{strokes: [A, B]}, {points: before-drag}]`
+  - Undo → dot back. Undo → trace reopens with `[A, B]`. Undo → `[A]`. Undo → empty, `ready`
+- **Dragging is handled carefully:** the snapshot is taken on `pointerdown`, but only pushed if the dot actually moved. Otherwise just clicking a dot (or double-clicking it) would fill the history with duplicate states
 - Capped at 100 entries so memory can't grow forever
 
 ### 5.9 Making the sticker (`sticker.js`)
@@ -382,11 +433,12 @@ snip-snip/
 
 ## 7. Testing
 
-- `npm test` runs 22 tests across two files
+- `npm test` runs 33 tests across three files
   - `distToSegment`: middle of a segment, past the end, zero-length segment
   - `simplify`: straight line → 2 points, L-shape keeps its corner, epsilon controls detail, short input is copied not reused, 20,000-point circle doesn't overflow
   - `polygonArea`: square in both directions, triangle
   - `bounds` and `clamp`
+  - `trace`: strokes are simplified with ends kept, a single click is kept, the input array is never changed, strokes undo one at a time, flatten joins strokes and drops an exact duplicate, closing needs 3+ points and enough area (a straight line has zero area), copies are deep
   - `zoomAt`: the pixel under the mouse stays put, clamping only moves by the zoom that actually happened
   - `clampPan`: the image can't leave the view, a fine view is left alone
   - `pandaArt`: sleeping eyes are solid black, every pose and time gives a full 34 × 28 grid of known colours, blinking changes the face, breathing makes the back taller, z's only appear while sleeping with opacity between 0 and 1, the bamboo shrinks per bite and resets
@@ -399,7 +451,10 @@ snip-snip/
   - Switch the trace colour mid-trace and in edit mode, reload, and check the choice is remembered
   - Watch the panda go sleep → sit → eat, and check it cheers on copy/download
   - Copy and paste the sticker into Discord or Google Docs, and download it
-  - Try a very small trace (panda should complain) and a non-image file
+  - Trace, let go, zoom in, keep tracing from somewhere else, then close with the button and with Enter
+  - With focus on a button (Tab), press Enter while a trace is open: it should close, not press the button
+  - Undo a stroke, close, undo (trace reopens), Esc (trace cleared), undo (trace back)
+  - Try a very small trace (panda should complain and the trace stays open) and a non-image file
 
 ---
 
@@ -413,6 +468,8 @@ snip-snip/
   - Ramer–Douglas–Peucker simplification with a zoom-aware epsilon, written iteratively to avoid stack overflow, and unit tested
 - **"How does the outline work?"**
   - Stroke at twice the width because strokes are centred on the path, round joins for a die-cut look
+- **"How does tracing work when zoomed in?"**
+  - Letting go keeps the trace open as a list of strokes, joined by straight lines. Each stroke is simplified with an epsilon based on its own zoom level, and closing is an explicit action. Undo is two-layered: strokes while open, snapshots otherwise
 - **"How does zoom toward the cursor work?"**
   - Solve for the new offset so the image pixel under the cursor is unchanged: `ox' = a − (a − ox) × k`, with an exponential wheel factor so mice and trackpads feel the same
 - **Performance**

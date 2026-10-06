@@ -344,6 +344,17 @@ body {
   background: var(--hi);
 }
 
+.px-btn.wide {
+  width: calc(100% - 6px); /* minus the 3px pixel border on each side */
+}
+
+.panel-note {
+  margin: 12px 0 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 18px;
+}
+
 /* ============ sticker preview ============ */
 .preview {
   height: 240px;

@@ -17,6 +17,7 @@ const els = {
   newBtn: $('newBtn'),
   undoBtn: $('undoBtn'),
   retraceBtn: $('retraceBtn'),
+  closeBtn: $('closeBtn'),
   zoomInBtn: $('zoomInBtn'),
   zoomOutBtn: $('zoomOutBtn'),
   fitBtn: $('fitBtn'),
@@ -36,7 +37,8 @@ const els = {
 const HINTS = {
   empty: 'hi! drop a pic~',
   ready: 'hold & drag around the part you want~',
-  tracing: 'keep going... let go to close it!',
+  tracing: 'keep tracing, or hit close sticker!',
+  drawing: 'drawing...',
   editing: 'drag dots to tweak, then copy!',
 };
 
@@ -62,15 +64,19 @@ const editor = createEditor(els.canvas, {
   onMode(mode) {
     els.status.textContent = STATUS[mode];
     els.dropzone.hidden = mode !== 'empty';
-    if (mode !== 'tracing') panda.say(HINTS[mode]);
-    else $('bubble').textContent = HINTS.tracing;
+    // While the mouse is down, onDrawing handles the bubble instead.
+    if (!(mode === 'tracing' && editor.drawing)) panda.say(HINTS[mode]);
+  },
+  onDrawing(drawing) {
+    panda.say(drawing ? HINTS.drawing : HINTS.tracing);
   },
   onShape() {
-    els.retraceBtn.disabled = editor.mode !== 'editing';
     schedulePreview();
   },
-  onHistory(canUndo) {
+  onState({ canUndo, canClose, canRetrace }) {
     els.undoBtn.disabled = !canUndo;
+    els.closeBtn.disabled = !canClose;
+    els.retraceBtn.disabled = !canRetrace;
   },
   onNotice(text) {
     notice(text);
@@ -153,6 +159,7 @@ window.addEventListener('paste', (e) => {
 
 els.undoBtn.addEventListener('click', () => editor.undo());
 els.retraceBtn.addEventListener('click', () => editor.retrace());
+els.closeBtn.addEventListener('click', () => editor.close());
 els.zoomInBtn.addEventListener('click', () => editor.zoomIn());
 els.zoomOutBtn.addEventListener('click', () => editor.zoomOut());
 els.fitBtn.addEventListener('click', () => editor.fit());
@@ -162,6 +169,17 @@ window.addEventListener('keydown', (e) => {
   if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
     e.preventDefault();
     editor.undo();
+    return;
+  }
+  // Enter / Esc only mean something while a trace is open (and the mouse isn't down).
+  if (editor.mode !== 'tracing' || editor.drawing || mod || e.altKey) return;
+  if (e.key === 'Enter') {
+    // preventDefault stops a focused button from also being "clicked" by Enter.
+    e.preventDefault();
+    editor.close();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    editor.retrace();
   }
 });
 

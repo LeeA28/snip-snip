@@ -7,7 +7,7 @@ Trace any part of an image and turn it into a transparent sticker you can copy o
 ## Features
 
 - **Load an image** by choosing a file, dragging it onto the canvas, or pasting with Ctrl + V
-- **Freehand lasso:** hold and drag around what you want (in a bright colour you pick: red, lime, cyan, magenta or yellow, remembered between visits), and let go to close the shape
+- **Freehand lasso:** hold and drag around what you want, in a bright colour you pick (red, lime, cyan, magenta or yellow, remembered between visits). Letting go keeps the trace open, so you can zoom, pan and keep going, then hit **close sticker** or Enter to finish
 - **Edit the shape:** drag dots to adjust, double-click a line to add a dot, double-click a dot to remove it
 - **Undo** with Ctrl + Z (up to 100 steps)
 - **Zoom and pan** for fine cuts: scroll to zoom toward the cursor (up to 800%), hold space and drag to move, or use the `−` / `+` / `fit` buttons. Pixels stay sharp above 100%

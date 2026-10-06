@@ -1,17 +1,25 @@
-// The big canvas: shows the image, records the lasso, lets you edit the dots, and zoom/pan.
+// The big canvas: shows the image, records the trace, lets you edit the dots, and zoom/pan.
 //
 // Two coordinate systems are used:
 //  - "image" coords: pixels of the original image. Points are STORED in these,
 //    so the cutout is full resolution no matter how the image is zoomed on screen.
 //  - "screen" coords: CSS pixels on the canvas. Used for drawing and mouse hit-tests.
 // view.scale / view.ox / view.oy convert between them:  screen = offset + image × scale
+//
+// Modes:
+//   empty    no image yet
+//   ready    image loaded, nothing traced
+//   tracing  an OPEN trace exists (strokes). Letting go of the mouse keeps it open;
+//            pressing again continues it. "close sticker" / Enter turns it into a shape.
+//   editing  a CLOSED shape (points) with draggable dots
 
-import { simplify, distToSegment, polygonArea, clamp, zoomAt, clampPan } from './geometry.js';
+import { distToSegment, clamp, zoomAt, clampPan } from './geometry.js';
+import { addStroke, removeLastStroke, flatten, canClose, copyStrokes } from './trace.js';
 
 const HANDLE = 5; // half the size of a dot, in screen px
 const HIT = 9; // how close the mouse must be to grab a dot
 const EDGE_HIT = 7; // how close the mouse must be to a line to add a dot
-const MIN_STEP = 3; // min screen px between recorded points while tracing
+const MIN_STEP = 3; // min screen px between recorded points while drawing
 const PAD = 24; // empty space around the image when it's fitted
 const PAN_MARGIN = 60; // at least this much of the image always stays on screen
 const MAX_ZOOM = 8; // 800%: one image pixel = 8 screen pixels
@@ -26,9 +34,12 @@ export function createEditor(canvas, callbacks = {}) {
 
   const s = {
     img: null,
-    points: [], // image coords
-    mode: 'empty', // empty | ready | tracing | editing
-    history: [], // snapshots of `points` for undo
+    mode: 'empty',
+    strokes: [], // open trace: list of strokes (image coords)
+    current: null, // the stroke being drawn right now (mouse is down), or null
+    points: [], // closed shape (image coords)
+    // Undo snapshots: { strokes } for an open trace, { points } for a closed shape.
+    history: [],
     view: { scale: 1, ox: 0, oy: 0 },
     fitScale: 1, // the scale that shows the whole image (also the minimum zoom)
     isFit: true, // still at the fitted view? (then window resizes re-fit)
@@ -36,12 +47,12 @@ export function createEditor(canvas, callbacks = {}) {
     cssH: 0,
     dpr: 1,
     drag: -1, // index of the dot being dragged
-    dragSnapshot: null, // points before the drag started
+    dragSnapshot: null, // shape before the drag started
     dragMoved: false,
     hover: -1,
     spaceDown: false, // space held = pan mode
     pan: null, // { startX, startY, ox, oy } while panning
-    lastTraceScreen: null,
+    lastDrawScreen: null, // last recorded point of the current stroke, in screen px
     traceColor: DEFAULT_TRACE,
     antOffset: 0,
     lastAnt: 0,
@@ -59,20 +70,46 @@ export function createEditor(canvas, callbacks = {}) {
     s.dirty = true;
   }
 
-  // Called whenever the finished shape changes, so the sticker preview can update.
-  function shapeChanged() {
+  // The smallest shape worth keeping: about 10 × 10 screen px at the current zoom.
+  const minArea = () => (10 / s.view.scale) ** 2;
+
+  // Tell main.js what the buttons should look like now.
+  function notify() {
     s.dirty = true;
+    callbacks.onState?.({
+      canUndo: s.strokes.length > 0 || s.history.length > 0,
+      canClose: s.mode === 'tracing' && !s.current && flatten(s.strokes).length >= 3,
+      canRetrace: s.strokes.length > 0 || s.points.length > 0,
+    });
+  }
+
+  // Called whenever the CLOSED shape changes, so the sticker preview can update.
+  function shapeChanged() {
     callbacks.onShape?.();
-    callbacks.onHistory?.(s.history.length > 0);
+    notify();
   }
 
   function snapshot() {
-    return s.points.map((p) => ({ x: p.x, y: p.y }));
+    return s.mode === 'tracing'
+      ? { strokes: copyStrokes(s.strokes) }
+      : { points: s.points.map((p) => ({ x: p.x, y: p.y })) };
   }
 
-  function pushHistory(points = snapshot()) {
-    s.history.push(points);
+  function pushHistory(entry = snapshot()) {
+    s.history.push(entry);
     if (s.history.length > HISTORY_LIMIT) s.history.shift();
+  }
+
+  function restore(entry) {
+    if (entry.strokes) {
+      s.strokes = entry.strokes;
+      s.points = [];
+      setMode(s.strokes.length ? 'tracing' : 'ready');
+    } else {
+      s.points = entry.points;
+      s.strokes = [];
+      setMode(s.points.length >= 3 ? 'editing' : 'ready');
+    }
   }
 
   // ---------- sizing, fitting and zooming ----------
@@ -124,10 +161,8 @@ export function createEditor(canvas, callbacks = {}) {
   }
 
   function viewChanged() {
-    // Mid-trace, keep the "last recorded point" in step with the new view.
-    if (s.mode === 'tracing' && s.points.length) {
-      s.lastTraceScreen = imageToScreen(s.points[s.points.length - 1]);
-    }
+    // Mid-stroke, keep the "last recorded point" in step with the new view.
+    if (s.current?.length) s.lastDrawScreen = imageToScreen(s.current[s.current.length - 1]);
     s.dirty = true;
     callbacks.onZoom?.(Math.round(s.view.scale * 100));
   }
@@ -187,7 +222,7 @@ export function createEditor(canvas, callbacks = {}) {
   }
 
   function canPan() {
-    return Boolean(s.img) && s.mode !== 'tracing' && s.drag < 0;
+    return Boolean(s.img) && !s.current && s.drag < 0;
   }
 
   function updateCursor() {
@@ -202,7 +237,10 @@ export function createEditor(canvas, callbacks = {}) {
   // ---------- keyboard: hold space to pan ----------
 
   // Typing a space into a text box shouldn't start panning.
-  const typing = (el) => el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && el.type !== 'range' && el.type !== 'checkbox' && el.type !== 'radio');
+  const typing = (el) =>
+    el &&
+    (el.isContentEditable ||
+      (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && !['range', 'checkbox', 'radio'].includes(el.type)));
 
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || typing(document.activeElement) || !s.img) return;
@@ -268,12 +306,16 @@ export function createEditor(canvas, callbacks = {}) {
       return;
     }
 
-    if (s.mode === 'ready') {
-      // Pointer capture keeps sending us moves even if the mouse leaves the canvas mid-trace.
+    if (s.mode === 'ready' || s.mode === 'tracing') {
+      // Start a new stroke. If a trace is already open, it's drawn joined to the last point
+      // by a straight line (the strokes are simply drawn one after another).
+      // Pointer capture keeps sending moves even if the mouse leaves the canvas.
       canvas.setPointerCapture(e.pointerId);
-      s.points = [screenToImage(sp)];
-      s.lastTraceScreen = sp;
+      s.current = [screenToImage(sp)];
+      s.lastDrawScreen = sp;
       setMode('tracing');
+      callbacks.onDrawing?.(true);
+      notify();
     }
   });
 
@@ -287,11 +329,11 @@ export function createEditor(canvas, callbacks = {}) {
       return;
     }
 
-    if (s.mode === 'tracing') {
-      const last = s.lastTraceScreen;
+    if (s.current) {
+      const last = s.lastDrawScreen;
       if (Math.hypot(sp.x - last.x, sp.y - last.y) >= MIN_STEP) {
-        s.points.push(screenToImage(sp));
-        s.lastTraceScreen = sp;
+        s.current.push(screenToImage(sp));
+        s.lastDrawScreen = sp;
         s.dirty = true;
       }
       return;
@@ -318,8 +360,13 @@ export function createEditor(canvas, callbacks = {}) {
     if (s.pan) {
       s.pan = null;
       updateCursor();
-    } else if (s.mode === 'tracing') {
-      finishTrace();
+    } else if (s.current) {
+      // Letting go just finishes this stroke. The trace stays open.
+      // Simplify with ~1.5 screen px at the zoom it was drawn at, so zoomed-in detail is kept.
+      s.strokes = addStroke(s.strokes, s.current, 1.5 / s.view.scale);
+      s.current = null;
+      callbacks.onDrawing?.(false);
+      notify();
     } else if (s.drag >= 0) {
       if (s.dragMoved) {
         pushHistory(s.dragSnapshot);
@@ -365,25 +412,89 @@ export function createEditor(canvas, callbacks = {}) {
     }
   });
 
-  function finishTrace() {
-    // Drop points that barely change the shape. Epsilon is ~1.5 screen px, converted to image px.
-    const simplified = simplify(s.points, 1.5 / s.view.scale);
-    const minArea = (10 / s.view.scale) ** 2;
+  // ---------- closing, undo, retrace ----------
 
-    if (simplified.length < 3 || polygonArea(simplified) < minArea) {
-      s.points = [];
-      setMode('ready');
-      callbacks.onNotice?.('too tiny! try a bigger loop');
+  function close() {
+    if (s.mode !== 'tracing' || s.current) return false;
+    const pts = flatten(s.strokes);
+    if (!canClose(pts, minArea())) {
+      callbacks.onNotice?.(pts.length < 3 ? 'trace a bit more first!' : 'too tiny! try a bigger loop');
+      return false;
+    }
+    pushHistory({ strokes: copyStrokes(s.strokes) }); // undo reopens the trace
+    s.points = pts;
+    s.strokes = [];
+    s.hover = -1;
+    setMode('editing');
+    shapeChanged();
+    return true;
+  }
+
+  function undo() {
+    if (s.current || s.drag >= 0) return;
+    if (s.mode === 'tracing' && s.strokes.length) {
+      // While open, undo removes one stroke at a time.
+      s.strokes = removeLastStroke(s.strokes);
+      if (!s.strokes.length) setMode('ready');
+      notify();
       return;
     }
+    if (!s.history.length) return;
+    s.hover = -1;
+    restore(s.history.pop());
+    shapeChanged();
+  }
 
-    pushHistory([]); // undoing the first trace goes back to an empty canvas
-    s.points = simplified;
-    setMode('editing');
+  function retrace() {
+    if (s.current || (!s.strokes.length && !s.points.length)) return;
+    pushHistory();
+    s.strokes = [];
+    s.points = [];
+    s.hover = -1;
+    setMode('ready');
     shapeChanged();
   }
 
   // ---------- drawing ----------
+
+  function strokePath(path) {
+    // White underneath for contrast, the trace colour on top.
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.stroke(path);
+    ctx.strokeStyle = s.traceColor;
+    ctx.lineWidth = 2;
+    ctx.stroke(path);
+  }
+
+  function drawOpenTrace() {
+    const pts = flatten(s.current ? [...s.strokes, s.current] : s.strokes).map(imageToScreen);
+    if (!pts.length) return;
+
+    if (pts.length > 1) {
+      const path = new Path2D();
+      path.moveTo(pts[0].x, pts[0].y);
+      for (const p of pts) path.lineTo(p.x, p.y);
+      strokePath(path);
+    }
+
+    // Start marker: a ring showing where "close sticker" will join back to.
+    const start = pts[0];
+    ctx.beginPath();
+    ctx.arc(start.x, start.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = s.traceColor;
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = INK;
+    ctx.beginPath();
+    ctx.arc(start.x, start.y, 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   function draw() {
     ctx.setTransform(s.dpr, 0, 0, s.dpr, 0, 0);
@@ -399,26 +510,14 @@ export function createEditor(canvas, callbacks = {}) {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(s.img, ox, oy, iw, ih);
 
-    const pts = s.points.map(imageToScreen);
-
-    if (s.mode === 'tracing' && pts.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (const p of pts) ctx.lineTo(p.x, p.y);
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      // A thin white edge under the coloured line keeps it visible on any image.
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 4;
-      ctx.stroke();
-      ctx.strokeStyle = s.traceColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    if (s.mode === 'tracing') {
+      drawOpenTrace();
       return;
     }
 
-    if (s.mode !== 'editing' || pts.length < 3) return;
+    if (s.mode !== 'editing' || s.points.length < 3) return;
 
+    const pts = s.points.map(imageToScreen);
     const shape = new Path2D();
     shape.moveTo(pts[0].x, pts[0].y);
     for (const p of pts) shape.lineTo(p.x, p.y);
@@ -480,6 +579,8 @@ export function createEditor(canvas, callbacks = {}) {
     loadImage(img) {
       s.img = img;
       s.points = [];
+      s.strokes = [];
+      s.current = null;
       s.history = [];
       s.hover = -1;
       s.drag = -1;
@@ -488,21 +589,9 @@ export function createEditor(canvas, callbacks = {}) {
       setMode('ready');
       shapeChanged();
     },
-    undo() {
-      if (s.mode === 'tracing' || s.drag >= 0 || !s.history.length) return;
-      s.points = s.history.pop();
-      s.hover = -1;
-      setMode(s.points.length >= 3 ? 'editing' : 'ready');
-      shapeChanged();
-    },
-    retrace() {
-      if (!s.points.length || s.mode === 'tracing') return;
-      pushHistory();
-      s.points = [];
-      s.hover = -1;
-      setMode('ready');
-      shapeChanged();
-    },
+    close,
+    undo,
+    retrace,
     zoomIn() {
       zoomBy(1.25);
     },
@@ -516,6 +605,9 @@ export function createEditor(canvas, callbacks = {}) {
     },
     get mode() {
       return s.mode;
+    },
+    get drawing() {
+      return Boolean(s.current);
     },
     get image() {
       return s.img;
